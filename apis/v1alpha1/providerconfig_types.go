@@ -29,6 +29,9 @@ import (
 type ProviderConfigSpec struct {
 	// Credentials required to authenticate to this provider.
 	Credentials ProviderCredentials `json:"credentials"`
+
+	// APIBase is the base URL for the LiteLLM API
+	APIBase string `json:"apiBase"`
 }
 
 // ProviderCredentials required to authenticate.
