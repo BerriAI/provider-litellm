@@ -27,12 +27,23 @@ import (
 
 // KeyParameters are the configurable fields of a Key.
 type KeyParameters struct {
-	ConfigurableField string `json:"configurableField"`
+	Duration       string            `json:"duration,omitempty"`
+	KeyAlias       string            `json:"key_alias,omitempty"`
+	Key            string            `json:"key,omitempty"`
+	TeamID         string            `json:"team_id,omitempty"`
+	UserID         string            `json:"user_id,omitempty"`
+	Models         []string          `json:"models,omitempty"`
+	MaxBudget      float64           `json:"max_budget,omitempty"`
+	BudgetDuration string            `json:"budget_duration,omitempty"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 
 // KeyObservation are the observable fields of a Key.
 type KeyObservation struct {
-	ObservableField string `json:"observableField,omitempty"`
+	Key     string      `json:"key,omitempty"`
+	Expires metav1.Time `json:"expires,omitempty"`
+	UserID  string      `json:"user_id,omitempty"`
+	Status  string      `json:"status,omitempty"` // e.g., "generated"
 }
 
 // A KeySpec defines the desired state of a Key.
