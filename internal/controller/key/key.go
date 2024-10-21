@@ -17,8 +17,12 @@ limitations under the License.
 package key
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,7 +42,7 @@ import (
 )
 
 const (
-	errNotKey    = "managed resource is not a Key custom resource"
+	errNotKey       = "managed resource is not a Key custom resource"
 	errTrackPCUsage = "cannot track ProviderConfig usage"
 	errGetPC        = "cannot get ProviderConfig"
 	errGetCreds     = "cannot get credentials"
@@ -120,7 +124,15 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errNewClient)
 	}
 
-	return &external{service: svc}, nil
+	apiBase := pc.Spec.APIBase
+	apiKey := string(data[xpv1.ResourceCredentialsSecretAPIKeyKey])
+
+	return &external{
+		service: svc,
+		client:  &http.Client{},
+		apiBase: apiBase,
+		apiKey:  apiKey,
+	}, nil
 }
 
 // An ExternalClient observes, then either creates, updates, or deletes an
@@ -129,6 +141,9 @@ type external struct {
 	// A 'client' used to connect to the external resource API. In practice this
 	// would be something like an AWS SDK client.
 	service interface{}
+	client  *http.Client
+	apiBase string
+	apiKey  string
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
@@ -156,22 +171,66 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 		ConnectionDetails: managed.ConnectionDetails{},
 	}, nil
 }
-
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
 	cr, ok := mg.(*v1alpha1.Key)
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errNotKey)
 	}
 
-	fmt.Printf("Creating: %+v", cr)
+	// Prepare the request payload
+	payload := map[string]interface{}{
+		"duration":        cr.Spec.ForProvider.Duration,
+		"key_alias":       cr.Spec.ForProvider.KeyAlias,
+		"key":             cr.Spec.ForProvider.Key,
+		"team_id":         cr.Spec.ForProvider.TeamID,
+		"user_id":         cr.Spec.ForProvider.UserID,
+		"models":          cr.Spec.ForProvider.Models,
+		"max_budget":      cr.Spec.ForProvider.MaxBudget,
+		"budget_duration": cr.Spec.ForProvider.BudgetDuration,
+		"metadata":        cr.Spec.ForProvider.Metadata,
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "failed to marshal payload")
+	}
+
+	// Make the API call to /key/generate
+	req, err := http.NewRequest("POST", c.apiBase+"/key/generate", bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "failed to create request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "failed to create key")
+	}
+
+	// Parse the response
+	var keyResponse struct {
+		Key     string    `json:"key"`
+		Expires time.Time `json:"expires"`
+		UserID  string    `json:"user_id"`
+		Status  string    `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&keyResponse); err != nil {
+		return managed.ExternalCreation{}, errors.Wrap(err, "failed to decode key response")
+	}
+
+	// Update the resource status
+	cr.Status.AtProvider.Key = keyResponse.Key
+	cr.Status.AtProvider.Expires = metav1.Time{Time: keyResponse.Expires}
+	cr.Status.AtProvider.UserID = keyResponse.UserID
+	cr.Status.AtProvider.Status = keyResponse.Status
 
 	return managed.ExternalCreation{
-		// Optionally return any details that may be required to connect to the
-		// external resource. These will be stored as the connection secret.
-		ConnectionDetails: managed.ConnectionDetails{},
+		ConnectionDetails: managed.ConnectionDetails{
+			"key": []byte(keyResponse.Key),
+		},
 	}, nil
 }
-
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
 	cr, ok := mg.(*v1alpha1.Key)
 	if !ok {
